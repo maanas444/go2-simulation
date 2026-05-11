@@ -34,8 +34,8 @@ FOOT_Z_STAND = -(L_THIGH * math.cos(THIGH_STAND) + L_CALF * math.cos(THIGH_STAND
 TRANSITION_DURATION = 1.5
 STEP_FREQ   = 2.0
 STEP_HEIGHT = 0.08
-STEP_LEN_X  = 0.18 # Slightly increased for better stride
-TURN_STRIDE = 0.12 # Increased for noticeable pivoting
+STEP_LEN_X  = 0.18 
+TURN_STRIDE = 0.12 
 PHASE_OFFSET = [0.0, math.pi, math.pi, 0.0] # FR FL RR RL
 
 # ── PID gains ─────────────────────────────────────────────────────────────────
@@ -104,9 +104,9 @@ def dz(v): return v if abs(v) > DEADZONE else 0.0
 def reset_robot(data):
     data.qpos[:] = 0.0
     data.qvel[:] = 0.0
-    data.qpos[2] = 0.12 # Start low for SIT
+    data.qpos[2] = 0.12 
     data.qpos[3] = 1.0
-    # Apply initial joint positions
+    
     for leg in range(4):
         hip, thigh, calf = REAL_SIT[_LEG_KEYS[leg]]
         qp = QPOS_IDX[leg]
@@ -147,12 +147,10 @@ def main():
             just_pressed = {b: cur_btn[b] and not prev_btn[b] for b in cur_btn}
             prev_btn = dict(cur_btn)
 
-            # --- FIX 1: Corrected Stick Polarity ---
             ly = dz(joy.get_axis(AXIS_LY))   # Fwd/Bwd (inverted signs removed)
             lx = dz(joy.get_axis(AXIS_LX))   # Strafe
             rx = dz(-joy.get_axis(AXIS_RX))  # Turn
 
-            # --- FIX 2: Reset Button Logic ---
             if just_pressed[BTN_Y]:
                 reset_robot(data)
                 mujoco.mj_forward(model, data)
@@ -162,7 +160,6 @@ def main():
             if just_pressed[BTN_A]:
                 state = "RISING" if state in ("SIT", "LOWERING") else "LOWERING"
             
-            # --- FIX 3: Persistence of State for Pivoting ---
             if state in ("STAND", "TROT"):
                 if abs(ly) > 0 or abs(lx) > 0 or abs(rx) > 0:
                     state = "TROT"
@@ -178,8 +175,8 @@ def main():
                 ekf.predict(z_accel)
 
                 if ekf_h_adr is not None:
-                    data.sensordata[ekf_h_adr] = ekf.x[0][0]   
-                    data.sensordata[true_h_adr] = data.qpos[2] 
+                    data.sensordata[ekf_h_adr] = ekf.x[0][0]   # Estimated Height
+                    data.sensordata[true_h_adr] = data.qpos[2] # Actual Height
 
                 if state == "RISING":
                     sit_stand_t = min(1.0, sit_stand_t + DT/TRANSITION_DURATION)
@@ -194,10 +191,8 @@ def main():
                     if state == "TROT":
                         ph = (STEP_FREQ * 2.0 * math.pi * t_global + PHASE_OFFSET[leg]) % (2.0 * math.pi)
                         
-                        # --- FIX 4: Mapping pivoting to Trajectory ---
                         stride_x = ly * STEP_LEN_X
                         stride_y = lx * 0.08
-                        # Yaw adds to X stride differently for front/back legs to pivot
                         yaw_factor = 1.0 if leg in (0, 1) else -1.0
                         yaw_offset = rx * TURN_STRIDE * yaw_factor
 
@@ -211,7 +206,7 @@ def main():
                             px = stride_x/2 - stride_x * prog - yaw_offset * math.sin(math.pi * prog)
                             py = stride_y/2 - stride_y * prog
                             pz = FOOT_Z_STAND
-                            ekf.update(-pz)
+                            ekf.update(0.28)
 
                         hip_t, (thigh_t, calf_t) = py, ik(px, pz)
                         
