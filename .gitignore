@@ -17,3 +17,5 @@ __pycache__/
 .idea/
 .DS_Store
 *.code-workspace
+# Logs and databases
+MUJOCO_LOG.TXT
