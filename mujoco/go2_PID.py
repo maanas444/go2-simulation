@@ -125,6 +125,14 @@ def main():
     pids = [[PIDController(KP[j], KI[j], KD[j], TORQUE_MAX[j]) for j in range(3)] for _ in range(4)]
     ekf = StateEstimator(model.opt.timestep)
 
+    try:
+        ekf_h_adr = model.sensor('EKF_Height_Est').adr[0]
+        true_h_adr = model.sensor('True_Height').adr[0]
+        print("Live graphing initialized.")
+    except Exception as e:
+        print(f"Graphing sensors not found in XML: {e}")
+        ekf_h_adr = true_h_adr = None
+
     reset_robot(data)
     mujoco.mj_forward(model, data)
 
@@ -169,6 +177,10 @@ def main():
                 z_accel = data.sensor("imu_acc").data[2]
                 ekf.predict(z_accel)
 
+                if ekf_h_adr is not None:
+                    data.sensordata[ekf_h_adr] = ekf.x[0][0]   
+                    data.sensordata[true_h_adr] = data.qpos[2] 
+
                 if state == "RISING":
                     sit_stand_t = min(1.0, sit_stand_t + DT/TRANSITION_DURATION)
                     if sit_stand_t >= 1.0: state = "STAND"
@@ -199,7 +211,7 @@ def main():
                             px = stride_x/2 - stride_x * prog - yaw_offset * math.sin(math.pi * prog)
                             py = stride_y/2 - stride_y * prog
                             pz = FOOT_Z_STAND
-                            ekf.update(0.28)
+                            ekf.update(-pz)
 
                         hip_t, (thigh_t, calf_t) = py, ik(px, pz)
                         
