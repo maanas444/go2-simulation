@@ -51,10 +51,11 @@ AXIS_LX, AXIS_LY, AXIS_RX = 0, 1, 3
 BTN_A, BTN_X, BTN_Y, DEADZONE = 0, 2, 3, 0.12
 _LEG_KEYS = ["FR", "FL", "RR", "RL"]
 
+# ── EKF State Estimator ──
 class StateEstimator:
     def __init__(self, dt):
         self.dt = dt
-        self.x = np.array([[0.28], [0.0]])
+        self.x = np.array([[0.28], [0.0]]) # [Height, Velocity]
         self.P = np.eye(2) * 0.5
         self.Q = np.diag([0.001, 0.001]) 
         self.R = 0.01                    
@@ -106,7 +107,6 @@ def reset_robot(data):
     data.qvel[:] = 0.0
     data.qpos[2] = 0.12 
     data.qpos[3] = 1.0
-    
     for leg in range(4):
         hip, thigh, calf = REAL_SIT[_LEG_KEYS[leg]]
         qp = QPOS_IDX[leg]
@@ -125,6 +125,7 @@ def main():
     pids = [[PIDController(KP[j], KI[j], KD[j], TORQUE_MAX[j]) for j in range(3)] for _ in range(4)]
     ekf = StateEstimator(model.opt.timestep)
 
+    # --- Live Graphing Initialization ---
     try:
         ekf_h_adr = model.sensor('EKF_Height_Est').adr[0]
         true_h_adr = model.sensor('True_Height').adr[0]
@@ -147,9 +148,9 @@ def main():
             just_pressed = {b: cur_btn[b] and not prev_btn[b] for b in cur_btn}
             prev_btn = dict(cur_btn)
 
-            ly = dz(joy.get_axis(AXIS_LY))   # Fwd/Bwd (inverted signs removed)
-            lx = dz(joy.get_axis(AXIS_LX))   # Strafe
-            rx = dz(-joy.get_axis(AXIS_RX))  # Turn
+            ly = dz(joy.get_axis(AXIS_LY))   
+            lx = dz(joy.get_axis(AXIS_LX))   
+            rx = dz(-joy.get_axis(AXIS_RX))  
 
             if just_pressed[BTN_Y]:
                 reset_robot(data)
@@ -175,8 +176,8 @@ def main():
                 ekf.predict(z_accel)
 
                 if ekf_h_adr is not None:
-                    data.sensordata[ekf_h_adr] = ekf.x[0][0]   # Estimated Height
-                    data.sensordata[true_h_adr] = data.qpos[2] # Actual Height
+                    data.sensordata[ekf_h_adr] = ekf.x[0][0]   
+                    data.sensordata[true_h_adr] = data.qpos[2] 
 
                 if state == "RISING":
                     sit_stand_t = min(1.0, sit_stand_t + DT/TRANSITION_DURATION)
@@ -186,27 +187,25 @@ def main():
                     if sit_stand_t <= 0.0: state = "SIT"
 
                 for leg in range(4):
-                    side = 1.0 if leg in (0, 2) else -1.0 # Left vs Right
+                    side = 1.0 if leg in (0, 2) else -1.0 
                     
                     if state == "TROT":
                         ph = (STEP_FREQ * 2.0 * math.pi * t_global + PHASE_OFFSET[leg]) % (2.0 * math.pi)
-                        
-                        stride_x = ly * STEP_LEN_X
-                        stride_y = lx * 0.08
+                        stride_x, stride_y = ly * STEP_LEN_X, lx * 0.08
                         yaw_factor = 1.0 if leg in (0, 1) else -1.0
                         yaw_offset = rx * TURN_STRIDE * yaw_factor
 
                         if ph < math.pi: # SWING
                             prog = ph / math.pi
                             px = -stride_x/2 + stride_x * prog + yaw_offset * math.sin(math.pi * prog)
-                            py = -stride_y/2 + stride_y * prog
+                            py = -stride_y/2 + stride_y * prog + (side * yaw_offset * 0.5)
                             pz = FOOT_Z_STAND + STEP_HEIGHT * math.sin(math.pi * prog)
                         else: # STANCE
                             prog = (ph - math.pi) / math.pi
                             px = stride_x/2 - stride_x * prog - yaw_offset * math.sin(math.pi * prog)
-                            py = stride_y/2 - stride_y * prog
+                            py = stride_y/2 - stride_y * prog - (side * yaw_offset * 0.5)
                             pz = FOOT_Z_STAND
-                            ekf.update(0.28)
+                            ekf.update(-pz) # FK-based update
 
                         hip_t, (thigh_t, calf_t) = py, ik(px, pz)
                         
