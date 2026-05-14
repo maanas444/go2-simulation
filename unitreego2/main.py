@@ -1,8 +1,8 @@
 import time
 import pygame
-from robot_io import MujocoOutput, UnitreeGo2Output
+from output import MujocoOutput, UnitreeGo2Output
 from gait_engine import GaitEngine 
-from my_filters import StateEstimator 
+from state_estimator import StateEstimator 
 
 # --- CONFIG ---
 USE_REAL_ROBOT = False  # The master switch
