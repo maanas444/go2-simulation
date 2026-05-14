@@ -67,18 +67,6 @@ EKF_WARMUP_SECS = 1.5
 
 # ── EKF State Estimator ──────────────────────────────────────────────────────
 class StateEstimator:
-    """
-    Simple 2-state EKF: [body height, vertical velocity].
-
-    Key fixes vs original:
-      • init() now accepts the true starting height so the filter begins
-        at the correct operating point rather than a hard-coded 0.28 m.
-      • Larger initial P during warmup; callers should honour EKF_WARMUP_SECS
-        before feeding stance-phase FK updates so the accel transient doesn't
-        corrupt the height estimate.
-      • Slightly higher process noise (Q) so the filter tracks faster when the
-        robot is genuinely moving, rather than diverging then snapping back.
-    """
     def __init__(self, dt, initial_height=0.28):
         self.dt = dt
         # Seed from actual height, zero vertical velocity
