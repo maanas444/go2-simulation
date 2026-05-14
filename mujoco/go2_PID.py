@@ -105,8 +105,6 @@ class StateEstimator:
 
     def update(self, measured_z):
         if not self.enabled:
-            # During warmup just track the measurement directly so we start
-            # converged rather than cold.
             self.x[0, 0] = measured_z
             return
         H = np.array([[1, 0]])
