@@ -10,7 +10,7 @@ from gait_engine import GaitEngine
 from state_estimator import StateEstimator 
 
 # --- CONFIG & CONSTANTS ---
-USE_REAL_ROBOT = False  # Toggle this for sim vs reality
+USE_REAL_ROBOT = True  # Toggle this for sim vs reality
 DT = 0.002              # 500Hz loop
 XML_PATH = "scene.xml"  # Path to your MuJoCo model
 
