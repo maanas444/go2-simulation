@@ -88,7 +88,7 @@ class UnitreeGo2Output(RobotOutput):
         self.error_integral = np.zeros(12)
         self.ki = 0.5  # Adjust this gain based on testing
 
-    def _state_callback(self, msg: LowState_):
+    def _state_callback(self, msg: "LowState_"):
         """Automatically updates internal state whenever the robot broadcasts it."""
         self.low_state = msg
 
