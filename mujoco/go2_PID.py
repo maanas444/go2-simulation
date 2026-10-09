@@ -3,6 +3,7 @@ import mujoco.viewer
 import pygame
 import time, os, math
 import numpy as np
+from ik_solver import IK_Solver, LEG_OFFSETS_FROM_BODY_ORIGIN
 
 XML_PATH = os.path.expanduser('~/unitree_mujoco/unitree_robots/go2/scene.xml')
 
@@ -60,6 +61,7 @@ QVEL_IDX = [[ 9,10,11],[6,7,8],[15,16,17],[12,13,14]]
 AXIS_LX, AXIS_LY, AXIS_RX = 0, 1, 3
 BTN_A, BTN_X, BTN_Y, DEADZONE = 0, 2, 3, 0.12
 _LEG_KEYS = ["FR", "FL", "RR", "RL"]
+_IK_SOLVER = IK_Solver()
 
 # ── EKF warmup: suppress EKF updates for this many seconds after
 #    launch/reset to let the IMU and pose settle.
@@ -115,14 +117,14 @@ class PIDController:
         return float(np.clip(torque, -self.torque_max, self.torque_max))
 
 
-def ik(px, pz):
-    r = np.clip(math.sqrt(px*px + pz*pz), 0.05, L_THIGH + L_CALF - 0.005)
-    cos_c = (L_THIGH**2 + L_CALF**2 - r**2) / (2.0*L_THIGH*L_CALF)
-    calf = -(math.pi - math.acos(np.clip(cos_c, -1.0, 1.0)))
-    alpha = math.atan2(px, -pz)
-    cos_b = (L_THIGH**2 + r**2 - L_CALF**2) / (2.0*L_THIGH*r)
-    thigh = alpha + math.acos(np.clip(cos_b, -1.0, 1.0))
-    return float(np.clip(thigh, *THIGH_LIM)), float(np.clip(calf, *CALF_LIM))
+def ik(leg, px, py, pz):
+    """Solve a leg target using the custom 3D, leg-origin-aware IK solver."""
+    origin = LEG_OFFSETS_FROM_BODY_ORIGIN[leg]
+    point = origin + np.array([px, py, pz], dtype=float)
+    abductor, hip, knee = _IK_SOLVER.solve_leg(
+        origin, point, is_front_leg=leg < 2
+    )
+    return float(abductor), float(hip), float(knee)
 
 
 def lerp_pose(leg_key, t):
@@ -139,7 +141,7 @@ def reset_robot(data):
     data.qvel[:] = 0.0
     data.qpos[2] = 0.12
     data.qpos[3] = 1.0
-    data.qpos[4] = np.pi #For spawning upside down in sim
+    #data.qpos[4] = np.pi #For spawning upside down in sim
     for leg in range(4):
         hip, thigh, calf = REAL_SIT[_LEG_KEYS[leg]]
         qp = QPOS_IDX[leg]
@@ -180,9 +182,6 @@ def compute_foot_target(leg, ph, stride_x, stride_y, yaw):
     # For a right-yaw turn, right legs step forward and left legs step back.
     side_sign = 1.0 if leg in (0, 2) else -1.0   # FR, RR = right side
 
-    # Nominal hip angle from the calibrated stand pose — keeps CoM centred.
-    hip_nominal = REAL_STAND[key][0]
-
     # Yaw modifies the longitudinal stride per side (differential drive).
     # No lateral/hip contribution from yaw — it causes splay, not rotation.
     yaw_stride = yaw * TURN_STRIDE * side_sign
@@ -209,11 +208,9 @@ def compute_foot_target(leg, ph, stride_x, stride_y, yaw):
 
         py_delta = -stride_y / 2.0 + stride_y * prog
 
-    # Hip target = nominal offset + any lateral delta
-    hip_t = hip_nominal + py_delta
-    thigh_t, calf_t = ik(px, pz)
+    abductor_t, thigh_t, calf_t = ik(leg, px, py_delta, pz)
 
-    return hip_t, thigh_t, calf_t
+    return abductor_t, thigh_t, calf_t
 
 
 def main():
