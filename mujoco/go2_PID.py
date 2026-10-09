@@ -1,11 +1,39 @@
 import mujoco
 import mujoco.viewer
 import pygame
+import csv
 import time, os, math
 import numpy as np
 from ik_solver import IK_Solver, LEG_OFFSETS_FROM_BODY_ORIGIN
 
 XML_PATH = os.path.expanduser('~/unitree_mujoco/unitree_robots/go2/scene.xml')
+IK_LOG_PATH = os.path.join(os.path.dirname(__file__), "ik_log.csv")
+_ik_log_file = None
+_ik_log_writer = None
+
+
+def start_ik_logging(path=IK_LOG_PATH):
+    global _ik_log_file, _ik_log_writer
+    _ik_log_file = open(path, "w", newline="", buffering=1)
+    _ik_log_writer = csv.writer(_ik_log_file)
+    _ik_log_writer.writerow(
+        ["timestamp", "leg", "abductor", "hip", "knee"]
+    )
+
+
+def stop_ik_logging():
+    global _ik_log_file, _ik_log_writer
+    if _ik_log_file is not None:
+        _ik_log_file.close()
+    _ik_log_file = None
+    _ik_log_writer = None
+
+
+def log_ik_values(leg, abductor, hip, knee):
+    if _ik_log_writer is not None:
+        _ik_log_writer.writerow(
+            [time.perf_counter(), _LEG_KEYS[leg], abductor, hip, knee]
+        )
 
 # ── Robot geometry ────────────────────────────────────────────────────────────
 L_THIGH = 0.213
@@ -209,7 +237,7 @@ def compute_foot_target(leg, ph, stride_x, stride_y, yaw):
         py_delta = -stride_y / 2.0 + stride_y * prog
 
     abductor_t, thigh_t, calf_t = ik(leg, px, py_delta, pz)
-
+    log_ik_values(leg, abductor_t, thigh_t, calf_t)
     return abductor_t, thigh_t, calf_t
 
 
@@ -246,97 +274,101 @@ def main():
     prev_btn = {BTN_A: False, BTN_X: False, BTN_Y: False}
     sim_time, wall_origin = 0.0, time.perf_counter()
 
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        while viewer.is_running():
-            pygame.event.pump()
-            cur_btn  = {b: bool(joy.get_button(b)) for b in (BTN_A, BTN_X, BTN_Y)}
-            just_pressed = {b: cur_btn[b] and not prev_btn[b] for b in cur_btn}
-            prev_btn = dict(cur_btn)
+    start_ik_logging()
+    try:
+        with mujoco.viewer.launch_passive(model, data) as viewer:
+            while viewer.is_running():
+                pygame.event.pump()
+                cur_btn  = {b: bool(joy.get_button(b)) for b in (BTN_A, BTN_X, BTN_Y)}
+                just_pressed = {b: cur_btn[b] and not prev_btn[b] for b in cur_btn}
+                prev_btn = dict(cur_btn)
 
             # Pygame axis convention: Y-axis is negative when pushed forward.
             # We keep the raw sign here and negate at the stride calculation
             # so the data flow is explicit and there is exactly one sign fix.
-            ly = dz(joy.get_axis(AXIS_LY))   # raw: check sign with your controller
-            lx = dz(joy.get_axis(AXIS_LX))   # positive = right push
-            rx = dz(joy.get_axis(AXIS_RX))   # positive = right push
+                ly = dz(joy.get_axis(AXIS_LY))   # raw: check sign with your controller
+                lx = dz(joy.get_axis(AXIS_LX))   # positive = right push
+                rx = dz(joy.get_axis(AXIS_RX))   # positive = right push
 
-            if just_pressed[BTN_Y]:
-                reset_robot(data)
-                mujoco.mj_forward(model, data)
-                state, sit_stand_t, t_global = "SIT", 0.0, 0.0
-                ekf_warmup_elapsed = 0.0
-                ekf.reset(sit_height)
-                print("Robot Reset")
+                if just_pressed[BTN_Y]:
+                    reset_robot(data)
+                    mujoco.mj_forward(model, data)
+                    state, sit_stand_t, t_global = "SIT", 0.0, 0.0
+                    ekf_warmup_elapsed = 0.0
+                    ekf.reset(sit_height)
+                    print("Robot Reset")
 
-            if just_pressed[BTN_A]:
-                state = "RISING" if state in ("SIT", "LOWERING") else "LOWERING"
+                if just_pressed[BTN_A]:
+                    state = "RISING" if state in ("SIT", "LOWERING") else "LOWERING"
 
-            if state in ("STAND", "TROT"):
-                state = "TROT" if (abs(ly) > 0 or abs(lx) > 0 or abs(rx) > 0) else "STAND"
+                if state in ("STAND", "TROT"):
+                    state = "TROT" if (abs(ly) > 0 or abs(lx) > 0 or abs(rx) > 0) else "STAND"
 
-            target_sim = min(time.perf_counter() - wall_origin, sim_time + 0.050)
-            while sim_time < target_sim:
-                DT = model.opt.timestep
-                t_global += DT
+                target_sim = min(time.perf_counter() - wall_origin, sim_time + 0.050)
+                while sim_time < target_sim:
+                    DT = model.opt.timestep
+                    t_global += DT
 
                 # ── EKF warmup gate ──────────────────────────────────────────
-                if not ekf.enabled:
-                    ekf_warmup_elapsed += DT
-                    if ekf_warmup_elapsed >= EKF_WARMUP_SECS:
-                        ekf.enabled = True
-                        print("EKF enabled.")
+                    if not ekf.enabled:
+                        ekf_warmup_elapsed += DT
+                        if ekf_warmup_elapsed >= EKF_WARMUP_SECS:
+                            ekf.enabled = True
+                            print("EKF enabled.")
 
-                z_accel = data.sensor("imu_acc").data[2]
-                ekf.predict(z_accel)
+                    z_accel = data.sensor("imu_acc").data[2]
+                    ekf.predict(z_accel)
 
-                if ekf_h_adr is not None:
-                    data.sensordata[ekf_h_adr] = ekf.x[0][0]
-                    data.sensordata[true_h_adr] = data.qpos[2]
+                    if ekf_h_adr is not None:
+                        data.sensordata[ekf_h_adr] = ekf.x[0][0]
+                        data.sensordata[true_h_adr] = data.qpos[2]
 
                 # ── State machine ────────────────────────────────────────────
-                if state == "RISING":
-                    sit_stand_t = min(1.0, sit_stand_t + DT / TRANSITION_DURATION)
-                    if sit_stand_t >= 1.0: state = "STAND"
-                elif state == "LOWERING":
-                    sit_stand_t = max(0.0, sit_stand_t - DT / TRANSITION_DURATION)
-                    if sit_stand_t <= 0.0: state = "SIT"
+                    if state == "RISING":
+                        sit_stand_t = min(1.0, sit_stand_t + DT / TRANSITION_DURATION)
+                        if sit_stand_t >= 1.0: state = "STAND"
+                    elif state == "LOWERING":
+                        sit_stand_t = max(0.0, sit_stand_t - DT / TRANSITION_DURATION)
+                        if sit_stand_t <= 0.0: state = "SIT"
 
                 # ── Per-leg control ──────────────────────────────────────────
-                for leg in range(4):
-                    if state == "TROT":
-                        ph = (STEP_FREQ * 2.0 * math.pi * t_global + PHASE_OFFSET[leg]) % (2.0 * math.pi)
+                    for leg in range(4):
+                        if state == "TROT":
+                            ph = (STEP_FREQ * 2.0 * math.pi * t_global + PHASE_OFFSET[leg]) % (2.0 * math.pi)
 
                         # Negate ly: pygame forward = negative axis → positive stride
                         # FWD_AXIS_SIGN corrects pygame Y-axis (negative = forward on most controllers)
-                        stride_x = FWD_AXIS_SIGN * ly * STEP_LEN_X
-                        stride_y =  lx * STEP_LEN_Y
+                            stride_x = FWD_AXIS_SIGN * ly * STEP_LEN_X
+                            stride_y =  lx * STEP_LEN_Y
 
-                        hip_t, thigh_t, calf_t = compute_foot_target(
-                            leg, ph, stride_x, stride_y, rx
-                        )
+                            hip_t, thigh_t, calf_t = compute_foot_target(
+                                leg, ph, stride_x, stride_y, rx
+                            )
 
                         # EKF stance-phase height update
-                        if ph >= math.pi:
-                            ekf.update(data.qpos[2])  # use true z during stance
+                            if ph >= math.pi:
+                                ekf.update(data.qpos[2])  # use true z during stance
 
-                    elif state in ("RISING", "LOWERING"):
-                        hip_t, thigh_t, calf_t = lerp_pose(_LEG_KEYS[leg], sit_stand_t)
-                    elif state == "SIT":
-                        hip_t, thigh_t, calf_t = REAL_SIT[_LEG_KEYS[leg]]
-                    else:  # STAND
-                        hip_t, thigh_t, calf_t = REAL_STAND[_LEG_KEYS[leg]]
+                        elif state in ("RISING", "LOWERING"):
+                            hip_t, thigh_t, calf_t = lerp_pose(_LEG_KEYS[leg], sit_stand_t)
+                        elif state == "SIT":
+                            hip_t, thigh_t, calf_t = REAL_SIT[_LEG_KEYS[leg]]
+                        else:  # STAND
+                            hip_t, thigh_t, calf_t = REAL_STAND[_LEG_KEYS[leg]]
 
-                    qp, qv, ci = QPOS_IDX[leg], QVEL_IDX[leg], CTRL_IDX[leg]
-                    targets = [hip_t, thigh_t, calf_t]
-                    for j in range(3):
-                        data.ctrl[ci[j]] = pids[leg][j].update(
-                            targets[j], data.qpos[qp[j]], data.qvel[qv[j]], DT
-                        )
+                        qp, qv, ci = QPOS_IDX[leg], QVEL_IDX[leg], CTRL_IDX[leg]
+                        targets = [hip_t, thigh_t, calf_t]
+                        for j in range(3):
+                            data.ctrl[ci[j]] = pids[leg][j].update(
+                                targets[j], data.qpos[qp[j]], data.qvel[qv[j]], DT
+                            )
 
-                mujoco.mj_step(model, data)
-                sim_time += DT
+                    mujoco.mj_step(model, data)
+                    sim_time += DT
 
-            viewer.sync()
+                viewer.sync()
+    finally:
+        stop_ik_logging()
 
 
 if __name__ == "__main__":
