@@ -139,6 +139,7 @@ def reset_robot(data):
     data.qvel[:] = 0.0
     data.qpos[2] = 0.12
     data.qpos[3] = 1.0
+    data.qpos[4] = np.pi #For spawning upside down in sim
     for leg in range(4):
         hip, thigh, calf = REAL_SIT[_LEG_KEYS[leg]]
         qp = QPOS_IDX[leg]
